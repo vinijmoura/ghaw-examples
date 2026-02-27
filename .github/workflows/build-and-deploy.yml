@@ -1,0 +1,109 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_PATH: 'HttpRequestFunction/HttpRequestFunction.csproj'
+  PUBLISH_PATH: './publish'
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore ${{ env.PROJECT_PATH }}
+
+      - name: Build
+        run: dotnet build ${{ env.PROJECT_PATH }} --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test --configuration Release --no-build --verbosity normal
+
+      - name: Publish
+        run: dotnet publish ${{ env.PROJECT_PATH }} --configuration Release --no-build --output ${{ env.PUBLISH_PATH }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app
+          path: ${{ env.PUBLISH_PATH }}
+
+  staging:
+    name: Staging
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: Staging
+      url: ${{ steps.deploy.outputs.webapp-url }}
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app
+          path: ${{ env.PUBLISH_PATH }}
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure App Service (Staging)
+        id: deploy
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          slot-name: staging
+          package: ${{ env.PUBLISH_PATH }}
+
+  production:
+    name: Production
+    runs-on: ubuntu-latest
+    needs: staging
+    environment:
+      name: Production
+      url: ${{ steps.deploy.outputs.webapp-url }}
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app
+          path: ${{ env.PUBLISH_PATH }}
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure App Service (Production)
+        id: deploy
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          package: ${{ env.PUBLISH_PATH }}
